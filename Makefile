@@ -71,7 +71,9 @@ CFILES := 	Libraries/CMSIS/Device/PY32F0xx/Source/system_py32f0xx.c \
 			User/main.c \
 			User/py32f0xx_it.c \
 			User/py32f0xx_hal_msp.c \
-			User/ws2812/light_ws2812_cortex.c
+			User/ws2812/light_ws2812_cortex.c \
+			User/ws2812/ws2812_ctrl.c \
+			User/hbridge.c
 
 # ASM single files
 AFILES := Libraries/CMSIS/Device/PY32F0xx/Source/gcc/startup_py32f002.s

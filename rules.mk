@@ -6,10 +6,10 @@ NULL	:= 2>/dev/null
 endif
 
 PREFIX		?= $(ARM_TOOCHAIN)/arm-none-eabi-
-CC			= $(PREFIX)gcc
-AS			= $(PREFIX)as
-LD			= $(PREFIX)ld
-OBJCOPY		= $(PREFIX)objcopy
+CC			= "$(PREFIX)gcc"
+AS			= "$(PREFIX)as"
+LD			= "$(PREFIX)ld"
+OBJCOPY		= "$(PREFIX)objcopy"
 # `$(shell pwd)` or `.`, both works
 TOP			= .
 BDIR		= $(TOP)/$(BUILD_DIR)
@@ -46,7 +46,7 @@ DEBUG_FLAGS ?= -gdwarf-3
 
 # c flags
 OPT			?= -O3
-CSTD		?= -std=c99
+CSTD		?= -std=gnu99
 TGT_CFLAGS 	+= $(ARCH_FLAGS) $(DEBUG_FLAGS) $(OPT) $(CSTD) $(addprefix -D, $(LIB_FLAGS)) -Wall -ffunction-sections -fdata-sections
 
 # asm flags
@@ -110,11 +110,11 @@ $(BDIR)/$(PROJECT).elf: $(OBJS) $(TOP)/$(LDSCRIPT)
 	$(Q)$(OBJCOPY) -I elf32-littlearm -O ihex  $< $@
 
 clean:
-	$(RMDIR) "$(BDIR)"
+	-$(RMDIR) "$(BDIR)"
 
 flash:
 ifeq ($(FLASH_PROGRM),jlink)
-	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
+	"$(JLINKEXE)" -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
 else ifeq ($(FLASH_PROGRM),pyocd)
 	$(PYOCD_EXE) erase -t $(PYOCD_DEVICE) --chip --config $(TOP)/Misc/pyocd.yaml
 	$(PYOCD_EXE) load $(BDIR)/$(PROJECT).hex -t $(PYOCD_DEVICE) --config $(TOP)/Misc/pyocd.yaml
@@ -124,7 +124,7 @@ endif
 
 erase:
 ifeq ($(FLASH_PROGRM),jlink)
-	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command_erase
+	"$(JLINKEXE)" -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command_erase
 else ifeq ($(FLASH_PROGRM),pyocd)
 	$(PYOCD_EXE) erase -t $(PYOCD_DEVICE) --chip --config $(TOP)/Misc/pyocd.yaml
 else

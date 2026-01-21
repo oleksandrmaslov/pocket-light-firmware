@@ -29,8 +29,8 @@ FLASH_PROGRM	?= jlink
 ##### Toolchains #######
 
 ifeq ($(detected_OS),WIN)     # is Windows_NT on XP, 2000, 7, Vista, 10...
-ARM_TOOCHAIN	?= C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/12.2 rel1/bin
-JLINKEXE		?= C:/Program Files/SEGGER/JLink/JLink
+ARM_TOOCHAIN	?= C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/14.3 rel1/bin
+JLINKEXE		?= C:/Program Files/SEGGER/JLink_V886/JLink.exe
 else
 ARM_TOOCHAIN	?= /opt/gcc-arm/arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi/bin
 JLINKEXE		?= /opt/SEGGER/JLink/JLinkExe
@@ -41,7 +41,7 @@ endif
 #   PY32F002AX5, PY32F002X5, 
 #   PY32F003X4, PY32F003X6, PY32F003X8, 
 #   PY32F030X4, PY32F030X6, PY32F030X7, PY32F030X8
-JLINK_DEVICE	?= PY32F030X8
+JLINK_DEVICE	?= PY32F002AX5
 # path to PyOCD, 
 PYOCD_EXE		?= pyocd
 # PyOCD device type, options: 
@@ -49,7 +49,7 @@ PYOCD_EXE		?= pyocd
 #   py32f003x4,  py32f003x6, py32f003x8, 
 #   py32f030x3,  py32f030x4, py32f030x6, py32f030x7, py32f030x8
 #   py32f072xb
-PYOCD_DEVICE	?= py32f030x8
+PYOCD_DEVICE	?= py32f002ax5
 
 
 ##### Paths ############
@@ -63,14 +63,15 @@ LDSCRIPT		= Libraries/LDScripts/py32f002x5.ld
 #   PY32F003x4, PY32F003x6, PY32F003x8, 
 #   PY32F030x3, PY32F030x4, PY32F030x6, PY32F030x7, PY32F030x8, 
 #   PY32F072xB
-LIB_FLAGS       = PY32F030x8
+LIB_FLAGS       = PY32F002Ax5
 
 # C source files (if there are any single ones)
 CSOURCES := 
 CFILES := 	Libraries/CMSIS/Device/PY32F0xx/Source/system_py32f0xx.c \
 			User/main.c \
 			User/py32f0xx_it.c \
-			User/py32f0xx_hal_msp.c
+			User/py32f0xx_hal_msp.c \
+			User/ws2812/light_ws2812_cortex.c
 
 # ASM single files
 AFILES := Libraries/CMSIS/Device/PY32F0xx/Source/gcc/startup_py32f002.s
@@ -78,7 +79,8 @@ AFILES := Libraries/CMSIS/Device/PY32F0xx/Source/gcc/startup_py32f002.s
 # Include paths
 INCLUDES	:= Libraries/CMSIS/Core/Include \
 			Libraries/CMSIS/Device/PY32F0xx/Include \
-			User
+			User \
+			User/ws2812
 
 ifeq ($(USE_LL_LIB),y)
 CFILES += 	Libraries/BSP_LL/Src/py32f0xx_bsp_clock.c \

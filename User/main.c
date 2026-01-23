@@ -21,9 +21,10 @@
   */
 
 /* Includes ------------------------------------------------------------------*/
-#include "py32f0xx_bsp_printf.h"
+#include "py32f0xx_hal.h"
 #include "ws2812_ctrl.h"
 #include "hbridge.h"
+#include "SEGGER_RTT.h"
 
 int main(void)
 {
@@ -32,9 +33,8 @@ int main(void)
   /* Default system clock is HSI 8MHz; keep as-is to match F_CPU for ws2812 */
   WS2812_Ctrl_Init();
   HBridge_Init();
-  BSP_USART_Config();
 
-  printf("\r\nPY32F0xx WS2812 + DRV8837 Demo SYSCLK: %lu\r\n", SystemCoreClock);
+  SEGGER_RTT_printf(0, "\r\nPY32F0xx WS2812 + DRV8837 Demo SYSCLK: %lu\r\n", SystemCoreClock);
 
   while (1)
   {

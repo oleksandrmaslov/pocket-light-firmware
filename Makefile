@@ -73,7 +73,9 @@ CFILES := 	Libraries/CMSIS/Device/PY32F0xx/Source/system_py32f0xx.c \
 			User/py32f0xx_hal_msp.c \
 			User/ws2812/light_ws2812_cortex.c \
 			User/ws2812/ws2812_ctrl.c \
-			User/hbridge.c
+			User/hbridge.c \
+			User/segger/SEGGER_RTT.c \
+			User/segger/SEGGER_RTT_printf.c
 
 # ASM single files
 AFILES := Libraries/CMSIS/Device/PY32F0xx/Source/gcc/startup_py32f002.s
@@ -82,7 +84,8 @@ AFILES := Libraries/CMSIS/Device/PY32F0xx/Source/gcc/startup_py32f002.s
 INCLUDES	:= Libraries/CMSIS/Core/Include \
 			Libraries/CMSIS/Device/PY32F0xx/Include \
 			User \
-			User/ws2812
+			User/ws2812 \
+			User/segger
 
 ifeq ($(USE_LL_LIB),y)
 CFILES += 	Libraries/BSP_LL/Src/py32f0xx_bsp_clock.c \

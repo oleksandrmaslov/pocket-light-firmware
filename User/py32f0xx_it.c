@@ -23,6 +23,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "py32f0xx_hal.h"
 #include "py32f0xx_it.h"
+#include "hbridge.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* Private typedef -----------------------------------------------------------*/
@@ -73,6 +74,7 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   HAL_IncTick();
+  HBridge_Systick();
 }
 
 /******************************************************************************/

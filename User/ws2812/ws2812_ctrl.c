@@ -4,7 +4,7 @@
 #include "py32f0xx_hal.h"
 
 /* How often to refresh battery measurement (ms) */
-#define VBAT_SAMPLE_PERIOD_MS   10000U
+#define VBAT_SAMPLE_PERIOD_MS   10U
 
 /* Nominal internal reference voltage in mV (from LL ADC header) */
 #define VREFINT_NOMINAL_MV      1200U
@@ -127,11 +127,16 @@ static void WS_SetColorForPercent(uint32_t now_ms)
       r = 255;
     }
   }
+  else if (soc_pct <= 25U)
+  {
+    /* Solid red from 25% down to 15% */
+    r = 255;
+  }
   else if (soc_pct <= 50U)
   {
-    /* Yellow to red: red fixed, green fades out */
+    /* Yellow at 50% fading to red at 25% */
     r = 255;
-    g = (uint8_t)(((uint16_t)(soc_pct - 15U) * 255U) / (50U - 15U));
+    g = (uint8_t)(((uint16_t)(soc_pct - 25U) * 255U) / (50U - 25U));
   }
   else
   {

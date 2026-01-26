@@ -73,6 +73,7 @@ CFILES := 	Libraries/CMSIS/Device/PY32F0xx/Source/system_py32f0xx.c \
 			User/py32f0xx_hal_msp.c \
 			User/ws2812/light_ws2812_cortex.c \
 			User/ws2812/ws2812_ctrl.c \
+			User/button_ctrl.c \
 			User/hbridge.c \
 			User/segger/SEGGER_RTT.c \
 			User/segger/SEGGER_RTT_printf.c

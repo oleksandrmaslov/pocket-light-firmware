@@ -29,10 +29,20 @@ static uint8_t indicator_active = 0;
 static uint32_t indicator_start = 0;
 static uint32_t indicator_duration_ms = 0;
 
+/* WS2812 битбанг требует, чтобы его не прерывали: кратковременно запрещаем прерывания
+   (включая TIM16 ШИМ) на время передачи одного кадра. */
+static void WS_SendArray_Blocking(uint8_t *data, int len)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  ws2812_sendarray(data, len);
+  if (!primask) __enable_irq();
+}
+
 static void WS_SendOff(void)
 {
   led.r = led.g = led.b = 0;
-  ws2812_sendarray((uint8_t *)&led, sizeof(led));
+  WS_SendArray_Blocking((uint8_t *)&led, sizeof(led));
 }
 
 static void VBat_AdcInit(void)
@@ -151,7 +161,7 @@ static void WS_SetColorForPercent(uint32_t now_ms)
   led.r = r;
   led.g = g;
   led.b = b;
-  ws2812_sendarray((uint8_t *)&led, sizeof(led));
+  WS_SendArray_Blocking((uint8_t *)&led, sizeof(led));
 }
 
 void WS2812_Ctrl_Init(void)

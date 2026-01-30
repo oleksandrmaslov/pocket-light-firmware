@@ -2,6 +2,7 @@
 #include "py32f0xx_hal.h"
 #include "py32f0xx_hal_flash.h"
 #include "py32f0xx_hal_flash_ex.h"
+#include "py32f0xx_hal_tim.h"
 #include "SEGGER_RTT.h"
 
 #define HBRIDGE_NSLP_PORT GPIOA
@@ -18,22 +19,35 @@
 #define HBRIDGE_FADE_MS        500U   /* reserved for future use */
 #define HBRIDGE_FADE_ON_MS    1000U   /* smooth turn-on from OFF */
 
-#define BRIGHT_MIN_PCT    20U
+#define BRIGHT_MIN_PCT    10U
 #define BRIGHT_MAX_PCT    100U
 
 #define CONFIG_MAGIC      0xBEEFCAFEUL
 #define CONFIG_PAGE_ADDR  0x08004C00UL /* aligned page near end of 20KB flash */
 
 #define PWM_WINDOW_MS     10U          /* 100 Hz software PWM via SysTick */
-#define HBRIDGE_FADE_STEPS     32U     /* perceptual steps for power-on fade */
+#define HBRIDGE_FADE_STEPS    128U     /* perceptual steps for power-on fade */
+#define PWM_IRQ_HZ       32000U        /* 32 kHz interrupt-driven PDM on PA4 (GPIO) -> above audible */
 
-/* Gamma-like curve (gamma ~2.2) normalized to 0..100% for smoother low-end ramp */
+/* Ease-in curve (quadratic-ish) normalized to 0..100% for smoother low-end ramp */
 static const uint8_t fade_curve_pct[HBRIDGE_FADE_STEPS] =
 {
-  0, 0, 0, 1, 1, 2, 3, 4,
-  5, 7, 8, 10, 12, 15, 17, 20,
-  23, 27, 30, 34, 38, 42, 47, 52,
-  57, 62, 68, 74, 80, 86, 93, 100
+  0, 0, 0, 0, 0, 0, 0, 0,
+  0, 1, 1, 1, 1, 1, 1, 1,
+  2, 2, 2, 2, 2, 3, 3, 3,
+  4, 4, 4, 5, 5, 5, 6, 6,
+  6, 7, 7, 8, 8, 8, 9, 9,
+  10, 10, 11, 11, 12, 13, 13, 14,
+  14, 15, 16, 16, 17, 17, 18, 19,
+  19, 20, 21, 22, 22, 23, 24, 25,
+  25, 26, 27, 28, 29, 30, 30, 31,
+  32, 33, 34, 35, 36, 37, 38, 39,
+  40, 41, 42, 43, 44, 45, 46, 47,
+  48, 49, 50, 51, 52, 54, 55, 56,
+  57, 58, 60, 61, 62, 63, 65, 66,
+  67, 68, 70, 71, 72, 74, 75, 76,
+  78, 79, 81, 82, 83, 85, 86, 88,
+  89, 91, 92, 94, 95, 97, 98, 100
 };
 
 static volatile hbridge_mode_t current_mode = HBRIDGE_OFF;
@@ -41,6 +55,9 @@ static hbridge_mode_t preferred_mode = HBRIDGE_FORWARD;
 static uint8_t brightness_pct = BRIGHT_MAX_PCT; /* target (user) brightness */
 static volatile uint8_t pwm_pct = 0;            /* actual PWM value on PA4 */
 static uint32_t pwm_window_start = 0;
+static volatile uint16_t pwm_permille = 0;      /* 0..1000 for high-res duty */
+static volatile uint16_t sd_accum = 0;          /* sigma-delta accumulator */
+static TIM_HandleTypeDef htim16;
 static struct
 {
   volatile uint8_t active;
@@ -61,6 +78,41 @@ static void HBridge_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(HBRIDGE_NSLP_PORT, &GPIO_InitStruct);
+}
+
+static void HBridge_PWM_TimerInit(void)
+{
+  __HAL_RCC_TIM16_CLK_ENABLE();
+
+  uint32_t timer_clk = HAL_RCC_GetPCLK1Freq();
+  uint32_t period = (timer_clk / PWM_IRQ_HZ);
+  if (period == 0) period = 1;
+  period -= 1U;
+  if (period > 0xFFFFU) period = 0xFFFFU;
+
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 0;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = (uint16_t)period;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  HAL_TIM_Base_Init(&htim16);
+
+  HAL_NVIC_SetPriority(TIM16_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(TIM16_IRQn);
+}
+
+static void HBridge_PWM_Start(void)
+{
+  sd_accum = 0;
+  __HAL_TIM_SET_COUNTER(&htim16, 0);
+  HAL_TIM_Base_Start_IT(&htim16);
+}
+
+static void HBridge_PWM_Stop(void)
+{
+  HAL_TIM_Base_Stop_IT(&htim16);
+  HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_RESET);
 }
 
 static void HBridge_UpdatePins(hbridge_mode_t mode)
@@ -147,6 +199,7 @@ static void HBridge_StartFade(uint8_t target_pct, uint32_t duration_ms)
 void HBridge_Init(void)
 {
   HBridge_GPIO_Init();
+  HBridge_PWM_TimerInit();
   HBridge_LoadBrightness();
 
   HBridge_UpdatePins(HBRIDGE_OFF);
@@ -178,6 +231,7 @@ void HBridge_SetMode(hbridge_mode_t mode)
     current_mode = mode;
     HBridge_UpdatePins(current_mode);
     HBridge_StartFade(target, HBRIDGE_FADE_ON_MS);
+    HBridge_PWM_Start();
   }
   else
   {
@@ -187,11 +241,13 @@ void HBridge_SetMode(hbridge_mode_t mode)
     if (current_mode != HBRIDGE_OFF)
     {
       fade.active = 0; /* keep current brightness, no fade needed */
+      HBridge_PWM_Start();
     }
     else
     {
       fade.active = 0;
       pwm_pct = 0;
+      HBridge_PWM_Stop();
     }
   }
 
@@ -236,6 +292,8 @@ void HBridge_SetBrightness(uint8_t pct)
   if (current_mode != HBRIDGE_OFF)
   {
     pwm_pct = brightness_pct; /* apply immediately when active */
+    pwm_permille = (uint16_t)pwm_pct * 10U;
+    sd_accum = 0;
   }
 }
 
@@ -274,7 +332,9 @@ void HBridge_Systick(void)
     if (elapsed >= fade.duration_ms)
     {
       pwm_pct = fade.to_pct;
+      pwm_permille = (uint16_t)pwm_pct * 10U;
       fade.active = 0;
+      sd_accum = 0;
     }
     else
     {
@@ -289,6 +349,7 @@ void HBridge_Systick(void)
       if (value < 0) value = 0;
       if (value > 100) value = 100;
       pwm_pct = (uint8_t)value;
+      pwm_permille = (uint16_t)pwm_pct * 10U;
     }
   }
 
@@ -296,23 +357,37 @@ void HBridge_Systick(void)
   {
     HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_RESET);
     pwm_window_start = now;
+    HBridge_PWM_Stop();
     return;
   }
 
-  uint32_t elapsed = now - pwm_window_start;
-  if (elapsed >= PWM_WINDOW_MS)
-  {
-    pwm_window_start = now;
-    elapsed = 0;
-  }
+  /* actual PWM output is driven by TIM16 at 20 kHz in interrupt */
+}
 
-  uint32_t duty_ms = (pwm_pct * PWM_WINDOW_MS) / 100U;
-  if (elapsed < duty_ms)
+void TIM16_IRQHandler(void)
+{
+  if (__HAL_TIM_GET_FLAG(&htim16, TIM_FLAG_UPDATE) != RESET)
   {
-    HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_SET);
-  }
-  else
-  {
-    HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_RESET);
+    if (__HAL_TIM_GET_IT_SOURCE(&htim16, TIM_IT_UPDATE) != RESET)
+    {
+      __HAL_TIM_CLEAR_IT(&htim16, TIM_IT_UPDATE);
+
+      if (current_mode == HBRIDGE_OFF)
+      {
+        HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_RESET);
+        return;
+      }
+
+      sd_accum += pwm_permille;
+      if (sd_accum >= 1000U)
+      {
+        sd_accum -= 1000U;
+        HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_SET);
+      }
+      else
+      {
+        HAL_GPIO_WritePin(HBRIDGE_CTRL_PORT, HBRIDGE_CTRL_PIN, GPIO_PIN_RESET);
+      }
+    }
   }
 }

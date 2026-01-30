@@ -1,16 +1,19 @@
 #include "button_ctrl.h"
 #include "py32f0xx_hal.h"
 #include "hbridge.h"
+#include "ws2812_ctrl.h"
 
 #define BTN1_PORT GPIOA
 #define BTN1_PIN  GPIO_PIN_6 /* SW1 */
 #define BTN2_PORT GPIOA
 #define BTN2_PIN  GPIO_PIN_5 /* SW2 (safety) */
 
-#define BTN_DEBOUNCE_MS   30U
-#define DOUBLE_CLICK_MS   400U
-#define LONG_PRESS_MS     1000U
+#define BTN_DEBOUNCE_MS       25U
+#define DOUBLE_CLICK_MS       400U
+#define LONG_PRESS_MS_SW1     1000U
+#define LONG_PRESS_MS_SW2     800U
 #define BR_STEP_MS        75U   /* brightness step interval during long hold (smoothed +50%) */
+#define BATT_INDICATE_MS  5000U
 
 typedef struct
 {
@@ -19,44 +22,45 @@ typedef struct
   uint32_t last_change;
   uint8_t long_fired;
   uint32_t press_start;
-  uint8_t click_count;
   uint32_t last_release;
+  uint8_t fell_evt;
+  uint8_t rise_evt;
 } btn_t;
 
 static btn_t btn1 = { .stable = 1, .last_raw = 1 };
 static btn_t btn2 = { .stable = 1, .last_raw = 1 };
-static uint8_t guard_block = 0;
 static uint8_t ramp_dir_up = 1;      /* toggles each long press */
 static uint32_t last_br_step = 0;
 static uint8_t ramp_active = 0;
-static uint8_t double_armed = 0;
+static uint8_t btn1_single_pending = 0;
+static uint32_t btn1_single_deadline = 0;
 
 static void Button_Debounce(btn_t *b, uint8_t raw, uint32_t now)
 {
+  b->fell_evt = 0;
+  b->rise_evt = 0;
+
   if (raw != b->last_raw)
   {
     b->last_raw = raw;
     b->last_change = now;
   }
 
-  if ((now - b->last_change) > BTN_DEBOUNCE_MS && raw != b->stable)
+  if ((now - b->last_change) >= BTN_DEBOUNCE_MS && raw != b->stable)
   {
     b->stable = raw;
     if (raw == GPIO_PIN_RESET)
     {
       b->press_start = now;
       b->long_fired = 0;
+      b->fell_evt = 1;
     }
     else
     {
       b->last_release = now;
+      b->rise_evt = 1;
     }
   }
-}
-
-static uint8_t Button_BothPressed(void)
-{
-  return (btn1.stable == GPIO_PIN_RESET) && (btn2.stable == GPIO_PIN_RESET);
 }
 
 static void Handle_BrightnessRamp(uint32_t now)
@@ -122,6 +126,26 @@ static void Handle_Btn1_Double(void)
   HBridge_TogglePreferredMode();
 }
 
+static void Handle_Btn2_Short(void)
+{
+  ramp_active = 0;
+  HBridge_SetMode(HBRIDGE_OFF);
+  WS2812_Ctrl_SetEnabled(0);
+}
+
+static void Handle_Btn2_Long(void)
+{
+  WS2812_Ctrl_RequestBatteryIndication(BATT_INDICATE_MS);
+}
+
+/* SW2 short is executed immediately on press to guarantee instant shutdown */
+static void Handle_Btn2_ShortImmediate(void)
+{
+  ramp_active = 0;
+  HBridge_SetMode(HBRIDGE_OFF);
+  WS2812_Ctrl_SetEnabled(0);
+}
+
 void ButtonCtrl_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct;
@@ -144,72 +168,77 @@ void ButtonCtrl_Task(void)
   Button_Debounce(&btn1, raw1, now);
   Button_Debounce(&btn2, raw2, now);
 
-  if (Button_BothPressed())
-  {
-    guard_block = 1;
-    btn1.click_count = 0;
-    ramp_active = 0;
-    return;
-  }
-
-  if (guard_block)
-  {
-    if (btn1.stable == GPIO_PIN_SET && btn2.stable == GPIO_PIN_SET)
-    {
-      guard_block = 0;
-    }
-    else
-    {
-      return;
-    }
-  }
-
   /* Long press detection */
   if (btn1.stable == GPIO_PIN_RESET && !btn1.long_fired)
   {
-    if ((now - btn1.press_start) >= LONG_PRESS_MS)
+    if ((now - btn1.press_start) >= LONG_PRESS_MS_SW1)
     {
       btn1.long_fired = 1;
-      btn1.click_count = 0;
+      btn1_single_pending = 0;
       Handle_Btn1_LongStart();
     }
   }
 
-  if (btn1.stable == GPIO_PIN_SET && btn1.long_fired && ramp_active)
+  if (btn1.rise_evt)
   {
-    Handle_Btn1_LongEnd();
-  }
-
-  Handle_BrightnessRamp(now);
-
-  /* Click / double-click handling */
-  if (btn1.stable == GPIO_PIN_SET && !btn1.long_fired)
-  {
-    /* released */
-    if (btn1.click_count == 0)
+    if (btn1.long_fired)
     {
-      btn1.click_count = 1;
-      btn1.last_release = now;
-      double_armed = 1;
+      Handle_Btn1_LongEnd();
+      btn1.long_fired = 0;
     }
-    else if (btn1.click_count == 1)
+    else
     {
-      /* second release inside window -> double */
-      if (double_armed && (now - btn1.last_release) <= DOUBLE_CLICK_MS)
+      /* release of short press -> start or complete click combo */
+      if (btn1_single_pending && (int32_t)(now - btn1_single_deadline) <= 0)
       {
         Handle_Btn1_Double();
-        btn1.click_count = 0;
-        double_armed = 0;
-        btn1.last_release = 0;
+        btn1_single_pending = 0;
+      }
+      else
+      {
+        btn1_single_pending = 1;
+        btn1_single_deadline = now + DOUBLE_CLICK_MS;
       }
     }
   }
 
-  /* Single click timeout */
-  if (btn1.click_count == 1 && (now - btn1.last_release) > DOUBLE_CLICK_MS)
+  Handle_BrightnessRamp(now);
+
+  if (btn1_single_pending && (int32_t)(now - btn1_single_deadline) >= 0)
   {
     Handle_Btn1_Single();
-    btn1.click_count = 0;
-    double_armed = 0;
+    btn1_single_pending = 0;
   }
+
+  /* SW2 handling */
+  if (btn2.fell_evt)
+  {
+    /* instant power-off on any SW2 press */
+    Handle_Btn2_ShortImmediate();
+    btn2.long_fired = 0;
+    btn2.press_start = now;
+  }
+
+  if (btn2.stable == GPIO_PIN_RESET && !btn2.long_fired)
+  {
+    if ((now - btn2.press_start) >= LONG_PRESS_MS_SW2)
+    {
+      btn2.long_fired = 1;
+      Handle_Btn2_Long();
+    }
+  }
+
+  if (btn2.rise_evt)
+  {
+    if (!btn2.long_fired)
+    {
+      /* already powered off on press, keep behavior consistent */
+      Handle_Btn2_Short();
+    }
+    btn2.long_fired = 0;
+  }
+
+  /* clear edge latches after processing */
+  btn1.fell_evt = btn1.rise_evt = 0;
+  btn2.fell_evt = btn2.rise_evt = 0;
 }

@@ -1,4 +1,8 @@
+speed 1000
+halt
 erase
+sleep 50
 loadfile Build/app.hex 0 noreset
+sleep 50
 reset
 exit

@@ -4,7 +4,7 @@
 #include "py32f0xx_hal.h"
 
 /* How often to refresh battery measurement (ms) */
-#define VBAT_SAMPLE_PERIOD_MS   10U
+#define VBAT_SAMPLE_PERIOD_MS   1000U
 
 /* Nominal internal reference voltage in mV (from LL ADC header) */
 #define VREFINT_NOMINAL_MV      1200U
@@ -24,7 +24,10 @@ static cRGB led;
 static uint32_t vdd_mv = 3300U;
 static uint8_t soc_pct = 0;
 static uint32_t last_sample = 0xFFFFFFFFUL - VBAT_SAMPLE_PERIOD_MS; /* force immediate first sample */
-static uint8_t ws_enabled = 1;
+static uint8_t ws_enabled = 0;
+static uint8_t indicator_active = 0;
+static uint32_t indicator_start = 0;
+static uint32_t indicator_duration_ms = 0;
 
 static void WS_SendOff(void)
 {
@@ -174,15 +177,31 @@ void WS2812_Ctrl_SetEnabled(uint8_t enable)
   ws_enabled = enable ? 1U : 0U;
   if (!ws_enabled)
   {
+    indicator_active = 0;
     WS_SendOff();
   }
+}
+
+void WS2812_Ctrl_RequestBatteryIndication(uint32_t duration_ms)
+{
+  uint32_t now = HAL_GetTick();
+  indicator_active = 1U;
+  indicator_start = now;
+  indicator_duration_ms = duration_ms;
+  last_sample = now - VBAT_SAMPLE_PERIOD_MS; /* force refresh at next task run */
+}
+
+uint8_t WS2812_Ctrl_IsActive(void)
+{
+  return (ws_enabled || indicator_active);
 }
 
 void WS2812_Ctrl_Task(void)
 {
   uint32_t now = HAL_GetTick();
 
-  if (ws_enabled && (now - last_sample >= VBAT_SAMPLE_PERIOD_MS))
+  /* Always keep voltage updated in background */
+  if ((now - last_sample) >= VBAT_SAMPLE_PERIOD_MS)
   {
     uint16_t raw = VBat_ReadVrefRaw();
     vdd_mv = VBat_ComputeVddMv(raw);
@@ -190,8 +209,19 @@ void WS2812_Ctrl_Task(void)
     last_sample = now;
   }
 
-  if (ws_enabled)
+  if (!WS2812_Ctrl_IsActive())
   {
-    WS_SetColorForPercent(now);
+    WS_SendOff(); /* ensure LED is dark whenever no active indication */
+    return;
+  }
+
+  WS_SetColorForPercent(now);
+
+  if (indicator_active && (int32_t)(now - indicator_start) >= (int32_t)indicator_duration_ms)
+  {
+    indicator_active = 0;
+    /* Always shut off after showing charge */
+    WS_SendOff();
+    ws_enabled = 0;
   }
 }

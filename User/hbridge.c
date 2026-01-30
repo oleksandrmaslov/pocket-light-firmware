@@ -15,7 +15,8 @@
 
 #define SWITCH_PAUSE_MS   5U
 #define DRIVER_PAUSE_MS   1U
-#define HBRIDGE_FADE_MS   500U
+#define HBRIDGE_FADE_MS        500U   /* reserved for future use */
+#define HBRIDGE_FADE_ON_MS    1000U   /* smooth turn-on from OFF */
 
 #define BRIGHT_MIN_PCT    20U
 #define BRIGHT_MAX_PCT    100U
@@ -29,6 +30,14 @@ static hbridge_mode_t current_mode = HBRIDGE_OFF;
 static hbridge_mode_t preferred_mode = HBRIDGE_FORWARD;
 static uint8_t brightness_pct = BRIGHT_MAX_PCT;
 static uint32_t pwm_window_start = 0;
+static struct
+{
+  uint8_t active;
+  uint32_t start_ms;
+  uint32_t duration_ms;
+  uint8_t from_pct;
+  uint8_t to_pct;
+} fade = {0};
 
 static void HBridge_GPIO_Init(void)
 {
@@ -103,20 +112,15 @@ static void HBridge_LoadBrightness(void)
   brightness_pct = BRIGHT_MAX_PCT;
 }
 
-static void HBridge_FadeTo(uint8_t target_pct, uint16_t duration_ms)
+static void HBridge_StartFade(uint8_t target_pct, uint32_t duration_ms)
 {
-  uint8_t start = brightness_pct;
-  uint16_t steps = duration_ms / 10U; /* finer steps for smoother fade */
-  if (steps == 0) steps = 1;
-  int16_t delta = (int16_t)target_pct - (int16_t)start;
-
-  for (uint16_t i = 1; i <= steps; i++)
-  {
-    uint8_t val = (uint8_t)(start + ((delta * i) / steps));
-    brightness_pct = val;
-    HAL_Delay(duration_ms / steps);
-  }
-  brightness_pct = target_pct;
+  if (target_pct < BRIGHT_MIN_PCT) target_pct = BRIGHT_MIN_PCT;
+  if (target_pct > BRIGHT_MAX_PCT) target_pct = BRIGHT_MAX_PCT;
+  fade.active = 1;
+  fade.start_ms = HAL_GetTick();
+  fade.duration_ms = duration_ms ? duration_ms : 1;
+  fade.from_pct = brightness_pct;
+  fade.to_pct = target_pct;
 }
 
 void HBridge_Init(void)
@@ -129,6 +133,7 @@ void HBridge_Init(void)
 
 void HBridge_SetMode(hbridge_mode_t mode)
 {
+  hbridge_mode_t prev = current_mode;
   if (mode == current_mode)
   {
     return;
@@ -142,12 +147,32 @@ void HBridge_SetMode(hbridge_mode_t mode)
     HAL_Delay(SWITCH_PAUSE_MS);
   }
 
+  /* prepare brightness before enabling driver to avoid flash */
+  if (prev == HBRIDGE_OFF && mode != HBRIDGE_OFF)
+  {
+    fade.active = 0;
+    brightness_pct = 0; /* start dark */
+  }
+
   current_mode = mode;
   HBridge_UpdatePins(current_mode);
 
   if (current_mode != HBRIDGE_OFF)
   {
-    HBridge_FadeTo(brightness_pct, HBRIDGE_FADE_MS);
+    if (prev == HBRIDGE_OFF)
+    {
+      uint8_t target = HBridge_GetBrightness();
+      pwm_window_start = HAL_GetTick();
+      HBridge_StartFade(target, HBRIDGE_FADE_ON_MS);
+    }
+    else
+    {
+      fade.active = 0; /* keep current brightness, no fade needed */
+    }
+  }
+  else
+  {
+    fade.active = 0;
   }
 
   SEGGER_RTT_printf(0, "H-bridge mode: %d\r\n", current_mode);
@@ -155,7 +180,7 @@ void HBridge_SetMode(hbridge_mode_t mode)
 
 void HBridge_Task(void)
 {
-  /* placeholder for periodic safety, currently no-op */
+  /* no-op: fade handled in SysTick for 1ms resolution */
 }
 
 hbridge_mode_t HBridge_GetMode(void)
@@ -187,6 +212,7 @@ void HBridge_SetBrightness(uint8_t pct)
   if (pct < BRIGHT_MIN_PCT) pct = BRIGHT_MIN_PCT;
   if (pct > BRIGHT_MAX_PCT) pct = BRIGHT_MAX_PCT;
   brightness_pct = pct;
+  fade.active = 0; /* explicit set cancels fade */
 }
 
 void HBridge_SaveBrightness(void)
@@ -216,6 +242,23 @@ void HBridge_SaveBrightness(void)
 void HBridge_Systick(void)
 {
   uint32_t now = HAL_GetTick();
+
+  /* update fade with 1 ms resolution */
+  if (fade.active)
+  {
+    uint32_t elapsed = now - fade.start_ms;
+    if (elapsed >= fade.duration_ms)
+    {
+      brightness_pct = fade.to_pct;
+      fade.active = 0;
+    }
+    else
+    {
+      int16_t delta = (int16_t)fade.to_pct - (int16_t)fade.from_pct;
+      int32_t num = (int32_t)delta * (int32_t)elapsed;
+      brightness_pct = (uint8_t)(fade.from_pct + num / (int32_t)fade.duration_ms);
+    }
+  }
 
   if (current_mode == HBRIDGE_OFF)
   {

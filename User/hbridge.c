@@ -28,6 +28,8 @@
 #define PWM_WINDOW_MS     10U          /* 100 Hz software PWM via SysTick */
 #define HBRIDGE_FADE_STEPS    128U     /* perceptual steps for power-on fade */
 #define PWM_IRQ_HZ       32000U        /* 32 kHz interrupt-driven PDM on PA4 (GPIO) -> above audible */
+#define HBRIDGE_GATE_MS   4U           /* keep output clamped low for first few ms of fade to avoid flash */
+#define HBRIDGE_FADE_SWITCH_MS 400U    /* fade down duration for direction toggle */
 
 /* Ease-in curve (quadratic-ish) normalized to 0..100% for smoother low-end ramp */
 static const uint8_t fade_curve_pct[HBRIDGE_FADE_STEPS] =
@@ -58,6 +60,13 @@ static uint32_t pwm_window_start = 0;
 static volatile uint16_t pwm_permille = 0;      /* 0..1000 for high-res duty */
 static volatile uint16_t sd_accum = 0;          /* sigma-delta accumulator */
 static TIM_HandleTypeDef htim16;
+static volatile uint8_t pwm_gate = 1;           /* block output until opened */
+static uint32_t pwm_gate_release_ms = 0;
+static struct
+{
+  uint8_t active;
+  hbridge_mode_t target;
+} mode_switch = {0};
 static struct
 {
   volatile uint8_t active;
@@ -185,6 +194,7 @@ static void HBridge_StartFade(uint8_t target_pct, uint32_t duration_ms)
   fade.duration_ms = duration_ms ? duration_ms : 1;
   fade.from_pct = pwm_pct;
   fade.to_pct = target_pct;
+   pwm_gate_release_ms = fade.start_ms + HBRIDGE_GATE_MS;
 
   if (fade.from_pct == fade.to_pct)
   {
@@ -254,6 +264,24 @@ void HBridge_SetMode(hbridge_mode_t mode)
   SEGGER_RTT_printf(0, "H-bridge mode: %d\r\n", current_mode);
 }
 
+void HBridge_SetModeSmooth(hbridge_mode_t mode)
+{
+  if (mode == current_mode)
+  {
+    return;
+  }
+
+  if (current_mode == HBRIDGE_OFF)
+  {
+    HBridge_SetMode(mode);
+    return;
+  }
+
+  mode_switch.target = mode;
+  mode_switch.active = 1;
+  HBridge_StartFade(0, HBRIDGE_FADE_SWITCH_MS);
+}
+
 void HBridge_Task(void)
 {
   /* no-op: fade handled in SysTick for 1ms resolution */
@@ -274,7 +302,7 @@ void HBridge_TogglePreferredMode(void)
   preferred_mode = (preferred_mode == HBRIDGE_FORWARD) ? HBRIDGE_REVERSE : HBRIDGE_FORWARD;
   if (current_mode != HBRIDGE_OFF)
   {
-    HBridge_SetMode(preferred_mode);
+    HBridge_SetModeSmooth(preferred_mode);
   }
 }
 
@@ -351,6 +379,14 @@ void HBridge_Systick(void)
       pwm_pct = (uint8_t)value;
       pwm_permille = (uint16_t)pwm_pct * 10U;
     }
+  }
+
+  /* If a smooth mode switch is pending and fade just finished, switch now */
+  if (!fade.active && mode_switch.active)
+  {
+    mode_switch.active = 0;
+    HBridge_SetMode(mode_switch.target);
+    return; /* HBridge_SetMode will manage PWM/timers */
   }
 
   if (current_mode == HBRIDGE_OFF)

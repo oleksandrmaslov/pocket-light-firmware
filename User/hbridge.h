@@ -11,6 +11,7 @@ typedef enum
 
 void HBridge_Init(void);
 void HBridge_SetMode(hbridge_mode_t mode);
+void HBridge_SetModeSmooth(hbridge_mode_t mode); /* fade-out then fade-in switch */
 void HBridge_Task(void);
 uint8_t HBridge_GetBrightness(void);
 void HBridge_SetBrightness(uint8_t pct);

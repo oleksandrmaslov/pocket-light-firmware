@@ -1,4 +1,5 @@
-def make_fade_curve(steps=128, gamma=2.2):
+import math
+def make_fade_curve(steps=128, gamma=1.0):
     curve = []
     for i in range(steps):
         x = i / (steps - 1)
@@ -7,5 +8,5 @@ def make_fade_curve(steps=128, gamma=2.2):
     return curve
 
 if __name__ == "__main__":
-    vals = make_fade_curve(steps=128, gamma=2.2)
+    vals = make_fade_curve(steps=128, gamma=1.0)
     print(", ".join(map(str, vals)))
